@@ -1,0 +1,292 @@
+import asyncio
+import serial_asyncio
+import logging
+from typing import Any, Dict, Union
+import struct
+from bless import (  # type: ignore
+    BlessServer,
+    BlessGATTCharacteristic,
+    GATTCharacteristicProperties,
+    GATTAttributePermissions,
+)
+import bleConstants         as bc
+import datetime,time
+import io
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(name=__name__)
+_data = []
+queue = []
+speed = 0
+hr    = 0
+power = 25
+rpm = 0
+serial_connected = False
+    
+class Kettler(asyncio.Protocol):
+   
+    def connection_made(self, transport):
+        self.transport = transport
+        logger.debug('port opened', transport)
+        transport.serial.rts = True  # You can manipulate Serial object via transport
+        #transport.write(b'ST\r\n')  # Write serial data via transport
+    
+    def translateData(self,segments):
+        global speed
+        global rpm
+        global hr
+        global power
+        # heartRate cadence speed distanceInFunnyUnits destPower energy timeElapsed realPower
+        # 000 052 095 000 030 0001 00:12 030
+        hr = int(segments[0])
+        rpm = int(segments[1])*2
+        speed = int(segments[2])*0.1
+        distance = (segments[3])
+        power = int(segments[4])
+        energy = int(segments[5])
+        time = (segments[7])
+        realPower = 0#int(segments[7])
+        logger.debug("time: %s, cadence: %s, power: %s  realPower: %s, HR: %s" % (time, rpm, power, realPower, hr))
+        
+    def data_received(self, data):
+        global _data
+        logger.debug('data received', repr(data))
+        _data.append(data.decode("utf-8"))
+        logger.debug(str(_data))
+        if b'\n' in data:
+            x = "".join(_data)
+            segments = x.split('\t')
+            if len(segments)>=8 :
+                self.translateData(segments)
+                _data.clear()
+                #self.transport.close()
+        
+    def getstatus(self):
+        self.transport.write(b'ST\r\n')
+        
+    def reset(self):
+        self.transport.write(b'CM\r\n')
+        
+    def setPower(self, power):
+        self.transport.write(b'PW'+str(power)+'\r\n')
+        
+    def askState(self):
+        global power
+        if (False) :
+            self.setPower(power)
+        else :
+            self.getstatus()
+
+
+
+    def connection_lost(self, exc):
+        print('port closed')
+        self.transport.loop.stop()
+
+    def pause_writing(self):
+        print('pause writing')
+        print(self.transport.get_write_buffer_size())
+
+    def resume_reading(self):
+        # This will start the callbacks to data_received again with all data that has been received in the meantime.
+        self.transport.resume_reading()
+        
+     
+
+
+async def reader():
+    global serial_connected
+    try:
+        transport, protocol = await serial_asyncio.create_serial_connection(loop, Kettler, 'COM3', baudrate=9600)
+        serial_connected = True
+    except Exception as e:
+        serial_connected = False
+        logger.info(f"Serial not connected")
+    global queue
+    queue.append(['c',bc.cFitnessMachineControlPointUUID, b'\x80\x05\x01'])
+    if not serial_connected: return
+    while True:
+        if len(queue) > 0:
+            if (queue[0][0]=='s'):
+                logger.info(queue)
+                if (queue[0][1]=='PW'):
+                    protocol.setPower(queue[0][2])
+                if (queue[0][1]=='ST'):
+                    protocol.askState()
+                if (queue[0][1]=='CM'):
+                    protocol.reset()
+                queue = queue[1:]
+        await asyncio.sleep(1)
+        #protocol.askState()
+        
+
+
+def read_request(characteristic: BlessGATTCharacteristic, **kwargs) -> bytearray:
+    logger.info(f" [{characteristic.uuid}] Read request recieved {characteristic.value}")
+    # b'\x02@\x00\x00\x08 \x00\x00'
+    
+    return characteristic.value
+
+
+def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs):
+    characteristic.value = value
+    global speed
+    global rpm
+    global hr
+    global power
+    global serial_connected
+    logger.info(f"[{characteristic.uuid}] Char value set to {characteristic.value}")
+    if characteristic.value == b"\x00":  #request control
+        logger.debug("request control")
+        response = b'\x80\x00\x01'
+        queue.append(['c',bc.cFitnessMachineControlPointUUID, response])
+    elif characteristic.value == b"\x01":  #resetControl
+        logger.debug("resetControl")
+        response = b'\x80\x01\x01'
+        queue.append(['c',bc.cFitnessMachineControlPointUUID, response])
+    elif characteristic.value == b"\x07":  #startOrResume
+        logger.debug("startOrResume")
+        response = b'\x80\x07\x01'
+        queue.append(['c',bc.cFitnessMachineControlPointUUID, response])
+    elif characteristic.value[0] == 17:  #setIndoorBikeSimulationParameters
+        logger.debug("setIndoorBikeSimulationParameters")
+        response = b'\x80\x11\x01'
+        try:
+            tuple  = struct.unpack (bc.little_endian + bc.unsigned_char + bc.short + bc.short + bc.unsigned_char + bc.unsigned_char, value)
+        except Exception as e:
+            logger.debug("bleBless error: unpack SetIndoorBikeSimulation %s" % e)
+        #windspeed = struct.unpack("<H",io.BytesIO(bytearray(value)).read(2)) * 0.001
+        #grade = struct.unpack("<H",io.BytesIO(bytearray(value)).read(2)) * 0.01
+        #crr = struct.unpack("<H",io.BytesIO(bytearray(value)).read(1)) * 0.0001
+        #w = struct.unpack("<H",io.BytesIO(bytearray(value)).read(1)) * 0.01
+        #logger.info(f"{windspeed},{grade},{crr},{w}")
+        grade = round(tuple[2] * 0.01,   2)
+        print (grade)
+        simpower = 170 * (1 + 1.15 * (rpm - 80.0) / 80.0) * (1.0 + 3 * (grade)/ 100.0)
+        gear = 4
+        simpower = makePower(simpower * (1.0 + 0.1 * (gear - 5)))
+        logger.info(f"simpower={simpower}")
+        queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
+        
+        if (abs(simpower-power)>5):
+            power = simpower
+            if serial_connected: 
+                queue.append(['s',"PW", simpower])
+    elif characteristic.value[0] == 5:  #set target power
+        logger.debug("set target power")
+        response = b'\x80\x05\x01'
+        pw = io.BytesIO(bytearray(value)).read(2)
+        power = struct.unpack("<H",  pw)  
+        logger.info(pw)
+        if serial_connected: 
+            queue.append(['s',"ST", makePower(180)])    
+
+def makePower(x, base=5,max = 400):
+    if (x<0): x = 0
+    if (x>max): x = max
+    return base * round(x/base)
+
+async def run(loop):
+    # Instantiate the server
+    gatt: Dict = {
+    bc.sFitnessMachineUUID: {
+        bc.cFitnessMachineFeatureUUID: {
+            "Properties":   (GATTCharacteristicProperties.read),
+            "Permissions":  (GATTAttributePermissions.readable | GATTAttributePermissions.writeable),
+            "Value":        bc.fmf_Info,                        # b'\x02\x40\x00\x00\x08\x20\x00\x00',
+            "value":        bc.fmf_Info,
+            "Description":  bc.cFitnessMachineFeatureName
+        },
+        bc.cIndoorBikeDataUUID: {
+            "Properties":   (GATTCharacteristicProperties.notify),
+            "Permissions":  (GATTAttributePermissions.readable | GATTAttributePermissions.writeable),
+            "Value":        bc.ibd_Info,                        # Instantaneous Cadence, Power, HeartRate
+            "value":        bc.ibd_Info,
+            "Description":  bc.cIndoorBikeDataName
+        },
+        bc.cFitnessMachineStatusUUID: {
+            "Properties":   (GATTCharacteristicProperties.notify),
+            "Permissions":  (GATTAttributePermissions.readable | GATTAttributePermissions.writeable),
+            "value":        b'\x00\x00',                        # Status as "sent" to Cycling Training Program
+            "Value":        b'\x00\x00',
+            "Description":  bc.cFitnessMachineStatusName
+        },
+        bc.cFitnessMachineControlPointUUID: {
+            "Properties":   (GATTCharacteristicProperties.write | GATTCharacteristicProperties.indicate),
+            "Permissions":  (GATTAttributePermissions.readable | GATTAttributePermissions.writeable),
+            "Value":        b'\x00\x00',                        # Commands as received from Cycling Training Program
+            "value":        b'\x00\x00',
+            "Description":  bc.cFitnessMachineControlPointName
+        },
+        bc.cSupportedPowerRangeUUID: {
+            "Properties":   (GATTCharacteristicProperties.read),
+            "Permissions":  (GATTAttributePermissions.readable | GATTAttributePermissions.writeable),
+            "Value":        bc.spr_Info,                        # Static additional properties of the FTMS
+                                                                # b'\x00\x00\xe8\x03\x01\x00'
+                                                                # min=0, max=1000, incr=1 
+                                                                # ==> 0x0000 0x03e8 0x0001 ==> 0x0000 0xe803 0x0100
+            "value":        bc.spr_Info,
+            "Description":  bc.cSupportedPowerRangeName
+        }
+    },
+    bc.sHeartRateUUID: {
+        bc.cHeartRateMeasurementUUID: {
+            "Properties":   (GATTCharacteristicProperties.notify),
+            "Permissions":  (GATTAttributePermissions.readable | GATTAttributePermissions.writeable),
+            "Value":        bc.hrm_Info,
+            "value":        bc.hrm_Info,
+            "Description":  bc.cHeartRateMeasurementName
+        }
+    }
+}
+    global queue
+    global serial_connected
+    my_service_name = "Kettler-APP"
+    server = BlessServer(name=my_service_name, loop=loop)
+    server.read_request_func = read_request
+    server.write_request_func = write_request
+    await server.add_gatt(gatt)
+    await server.start()
+    logger.debug(server.get_characteristic(bc.cFitnessMachineFeatureUUID))
+    logger.debug("Advertising")
+    await asyncio.sleep(3)
+    #84-24-FA-00-00-00-00-00-00-00-00-00-00-00-00-00-00
+    while (True):
+        global speed
+        global rpm
+        global hr
+        global power
+        send = ( b'\x44\x02\xaa\xaa\xbb\xbb\xcc\xcc\xdd\xdd' )
+        _speed = struct.pack('<h',int(speed)*100)
+        _rpm   = struct.pack('<h',rpm)
+        _power = struct.pack('<h',power)
+        _hr    = struct.pack('<h',hr)
+        send=send.replace(b'\xaa\xaa', _speed)
+        send=send.replace(b'\xbb\xbb', _rpm)
+        send=send.replace(b'\xcc\xcc', _power)
+        send=send.replace(b'\xdd\xdd', _hr)
+        logger.debug("%s", send)
+        logger.info("cadence: %s, power: %s  speed: %s, HR: %s" % (rpm, power, speed, hr))
+        server.get_characteristic(bc.cIndoorBikeDataUUID).value =  bytearray (send)  
+        server.update_value(     bc.sFitnessMachineUUID, bc.cIndoorBikeDataUUID    )
+        if len(queue) > 0:
+            if (queue[0][0]=='c'):
+                logger.info(queue)
+                server.get_characteristic(queue[0][1]).value =  bytearray (queue[0][2])  
+                server.update_value(     bc.sFitnessMachineUUID, queue[0][1]    )
+                queue = queue[1:]
+        if serial_connected:
+            queue.append(['s',"ST"])
+        await asyncio.sleep(1)
+    await server.stop()
+
+async def repeater(): # Here
+    loop = asyncio.get_running_loop()
+    loop.create_task(reader()) # Here
+    await loop.create_task(run(loop)) # "await" is needed
+
+
+
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+loop.run_until_complete(repeater()) 
