@@ -103,7 +103,7 @@ async def reader():
         serial_connected = False
         logger.info(f"Serial not connected")
     global queue
-    queue.append(['c',bc.cFitnessMachineControlPointUUID, b'\x80\x05\x01'])
+    #queue.append(['c',bc.cFitnessMachineControlPointUUID, b'\x80\x05\x01'])
     if not serial_connected: return
     while True:
         if len(queue) > 0:
@@ -160,11 +160,14 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         #crr = struct.unpack("<H",io.BytesIO(bytearray(value)).read(1)) * 0.0001
         #w = struct.unpack("<H",io.BytesIO(bytearray(value)).read(1)) * 0.01
         #logger.info(f"{windspeed},{grade},{crr},{w}")
+        wind  = round(tuple[1] * 0.001,  3)
         grade = round(tuple[2] * 0.01,   2)
+        crr   = round(tuple[3] * 0.0001, 4)
+        w     = round(tuple[4] * 0.01,   2)
         print (grade)
         simpower = 170 * (1 + 1.15 * (rpm - 80.0) / 80.0) * (1.0 + 3 * (grade)/ 100.0)
-        gear = 4
-        simpower = makePower(simpower * (1.0 + 0.1 * (gear - 5)))
+        gear = 5
+        simpower = Normalize(simpower * (1.0 + 0.1 * (gear - 5)))
         logger.info(f"simpower={simpower}")
         queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
         
@@ -179,9 +182,38 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         power = struct.unpack("<H",  pw)  
         logger.info(pw)
         if serial_connected: 
-            queue.append(['s',"ST", makePower(180)])    
+            queue.append(['s',"ST", Normalize(180)])    
 
-def makePower(x, base=5,max = 400):
+def makePower(rpm,grade):
+    wheel = 645.0                       #609.6
+    gear  = 4
+    speed = int(3.6*gear*0.0166667*wheel*0.001*rpm*10/3600.0*1000.0)
+    
+    # formula https://www.fiets.nl/training/de-natuurkunde-van-het-fietsen/
+    
+    c     = Cr                              # roll-resistance constant
+    mm    = 93                              # riders weight kg
+    mb    = 8.8                             # bike weight kg
+    m     = mb + mm
+    g     = 9.7803184                       # m/s2
+    v     = speed / 3.6                     # m/s       km/hr * 1000 / 3600
+    # kotalni upor
+    Proll = c * m * g * v                   # Watt
+    p     = 1.205                           # air-density
+    cdA   = 0.3                             # resistance factor
+                                            # p_cdA = 0.375
+    w     =  0                              # wind-speed
+    # zračni upor
+    Pair  = 0.5 * p * cdA * (v+w)*(v+w)* v  # Watt
+    i     = grade                           # Percentage 0...100
+    # upor strmine
+    Pslope= i/100 * m * g * v               # Watt
+    # mehanski upor (veriga, pesto)
+    Pbike = 37                              # bike effi
+    return Normalize(Proll + Pair + Pslope + Pbike)
+    
+
+def Normalize(x, base=5,max = 400):
     if (x<0): x = 0
     if (x>max): x = max
     return base * round(x/base)
