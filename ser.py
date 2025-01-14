@@ -39,14 +39,17 @@ class Kettler(asyncio.Protocol):
         # heartRate cadence speed distanceInFunnyUnits destPower energy timeElapsed realPower
         # 000 052 095 000 030 0001 00:12 030
         hr = int(segments[0])
-        rpm = int(segments[1])*2
+        rpm = int(segments[1])
         speed = int(segments[2])*0.1
         distance = (segments[3])
+        #if (power != Normalize(int(segments[4]))):
+        #   queue.append(['s',"PW", power])
         power = int(segments[4])
         energy = int(segments[5])
-        time = (segments[7])
-        realPower = 0#int(segments[7])
-        logger.debug("time: %s, cadence: %s, power: %s  realPower: %s, HR: %s" % (time, rpm, power, realPower, hr))
+        time = segments[6]
+        realPower = int(segments[7])
+        logger.info("time: %s, cadence: %s, power: %s  realPower: %s, HR: %s" % (time, rpm, power, realPower, hr))
+        
         
     def data_received(self, data):
         global _data
@@ -68,7 +71,7 @@ class Kettler(asyncio.Protocol):
         self.transport.write(b'CM\r\n')
         
     def setPower(self, power):
-        self.transport.write(b'PW'+str(power)+'\r\n')
+        self.transport.write(bytes('PW'+str(power)+'\r\n','utf-8'))
         
     def askState(self):
         global power
@@ -104,6 +107,7 @@ async def reader():
         logger.info(f"Serial not connected")
     global queue
     #queue.append(['c',bc.cFitnessMachineControlPointUUID, b'\x80\x05\x01'])
+    queue.append(['s','CM'])
     if not serial_connected: return
     while True:
         if len(queue) > 0:
@@ -164,17 +168,17 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         grade = round(tuple[2] * 0.01,   2)
         crr   = round(tuple[3] * 0.0001, 4)
         w     = round(tuple[4] * 0.01,   2)
-        print (grade)
-        simpower = 170 * (1 + 1.15 * (rpm - 80.0) / 80.0) * (1.0 + 3 * (grade)/ 100.0)
-        gear = 5
-        simpower = Normalize(simpower * (1.0 + 0.1 * (gear - 5)))
+        print (wind,crr,grade)
+        #simpower = 170 * (1 + 1.15 * (rpm - 80.0) / 80.0) * (1.0 + 3 * (grade)/ 100.0)
+        #gear = 5
+        #simpower = Normalize(simpower * (1.0 + 0.1 * (gear - 5)))
+        simpower = Normalize(makePower(rpm,grade))
         logger.info(f"simpower={simpower}")
         queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
-        
         if (abs(simpower-power)>5):
             power = simpower
             if serial_connected: 
-                queue.append(['s',"PW", simpower])
+                queue.append(['s',"PW", power])
     elif characteristic.value[0] == 5:  #set target power
         logger.debug("set target power")
         response = b'\x80\x05\x01'
@@ -182,7 +186,7 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         power = struct.unpack("<H",  pw)  
         logger.info(pw)
         if serial_connected: 
-            queue.append(['s',"ST", Normalize(180)])    
+            queue.append(['s',"PW", Normalize(140)])    
 
 def makePower(rpm,grade):
     wheel = 645.0                       #609.6
@@ -191,7 +195,7 @@ def makePower(rpm,grade):
     
     # formula https://www.fiets.nl/training/de-natuurkunde-van-het-fietsen/
     
-    c     = Cr                              # roll-resistance constant
+    c     = 0.004                           # roll-resistance constant
     mm    = 93                              # riders weight kg
     mb    = 8.8                             # bike weight kg
     m     = mb + mm
@@ -288,18 +292,23 @@ async def run(loop):
         global rpm
         global hr
         global power
-        send = ( b'\x44\x02\xaa\xaa\xbb\xbb\xcc\xcc\xdd\xdd' )
-        _speed = struct.pack('<h',int(speed)*100)
-        _rpm   = struct.pack('<h',rpm)
-        _power = struct.pack('<h',power)
-        _hr    = struct.pack('<h',hr)
-        send=send.replace(b'\xaa\xaa', _speed)
-        send=send.replace(b'\xbb\xbb', _rpm)
-        send=send.replace(b'\xcc\xcc', _power)
-        send=send.replace(b'\xdd\xdd', _hr)
-        logger.debug("%s", send)
+        #send = ( b'\x44\x02\xaa\xaa\xbb\xbb\xcc\xcc\xdd\xdd' )
+        #_speed = struct.pack('<h',int(speed)*100)
+        #_rpm   = struct.pack('<h',rpm)
+        #_power = struct.pack('<h',power)
+        #_hr    = struct.pack('<h',hr)
+        #send=send.replace(b'\xaa\xaa', _speed)
+        #send=send.replace(b'\xbb\xbb', _rpm)
+        #send=send.replace(b'\xcc\xcc', _power)
+        #send=send.replace(b'\xdd\xdd', _hr)
+        flags = (bc.ibd_InstantaneousCadencePresent | bc.ibd_InstantaneousPowerPresent)
+        s     = int(speed * 100) & 0xffff      # Avoid value anomalities
+        c     = int(rpm*2 )      & 0xffff      # Avoid value anomalities
+        p     = int(power)       & 0xffff      # Avoid value anomalities
+        info  = struct.pack (bc.little_endian + bc.unsigned_short * 4, flags, s, c, p)
+        logger.debug("%s", info)
         logger.info("cadence: %s, power: %s  speed: %s, HR: %s" % (rpm, power, speed, hr))
-        server.get_characteristic(bc.cIndoorBikeDataUUID).value =  bytearray (send)  
+        server.get_characteristic(bc.cIndoorBikeDataUUID).value =  bytearray (info)  
         server.update_value(     bc.sFitnessMachineUUID, bc.cIndoorBikeDataUUID    )
         if len(queue) > 0:
             if (queue[0][0]=='c'):
@@ -308,7 +317,8 @@ async def run(loop):
                 server.update_value(     bc.sFitnessMachineUUID, queue[0][1]    )
                 queue = queue[1:]
         if serial_connected:
-            queue.append(['s',"ST"])
+            if (len(queue) ==0):
+                queue.append(['s',"ST"])
         await asyncio.sleep(1)
     await server.stop()
 
