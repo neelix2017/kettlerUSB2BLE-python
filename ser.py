@@ -21,7 +21,9 @@ speed = 0
 hr    = 0
 power = 25
 rpm = 0
+time = 0
 serial_connected = False
+session_data = []
     
 class Kettler(asyncio.Protocol):
    
@@ -36,6 +38,7 @@ class Kettler(asyncio.Protocol):
         global rpm
         global hr
         global power
+        global time
         # heartRate cadence speed distanceInFunnyUnits destPower energy timeElapsed realPower
         # 000 052 095 000 030 0001 00:12 030
         hr = int(segments[0])
@@ -46,7 +49,8 @@ class Kettler(asyncio.Protocol):
         #   queue.append(['s',"PW", power])
         power = int(segments[4])
         energy = int(segments[5])
-        time = segments[6]
+        t = segments[6].split('\t')
+        time = int(t[0])*60+int(t[1])
         realPower = int(segments[7])
         logger.info("time: %s, cadence: %s, power: %s  realPower: %s, HR: %s" % (time, rpm, power, realPower, hr))
         
@@ -168,11 +172,10 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         grade = round(tuple[2] * 0.01,   2)
         crr   = round(tuple[3] * 0.0001, 4)
         w     = round(tuple[4] * 0.01,   2)
-        print (wind,crr,grade)
         #simpower = 170 * (1 + 1.15 * (rpm - 80.0) / 80.0) * (1.0 + 3 * (grade)/ 100.0)
         #gear = 5
         #simpower = Normalize(simpower * (1.0 + 0.1 * (gear - 5)))
-        simpower = Normalize(makePower(rpm,grade))
+        simpower = Normalize(makePower(rpm,grade,crr))
         logger.info(f"simpower={simpower}")
         queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
         if (abs(simpower-power)>5):
@@ -188,14 +191,14 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         if serial_connected: 
             queue.append(['s',"PW", Normalize(140)])    
 
-def makePower(rpm,grade):
+def makePower(rpm,grade,crr):
     wheel = 645.0                       #609.6
     gear  = 4
     speed = int(3.6*gear*0.0166667*wheel*0.001*rpm*10/3600.0*1000.0)
     
     # formula https://www.fiets.nl/training/de-natuurkunde-van-het-fietsen/
     
-    c     = 0.004                           # roll-resistance constant
+    c     = crr     #0.004                  # roll-resistance constant
     mm    = 93                              # riders weight kg
     mb    = 8.8                             # bike weight kg
     m     = mb + mm
@@ -292,6 +295,8 @@ async def run(loop):
         global rpm
         global hr
         global power
+        global time
+        global session_data
         #send = ( b'\x44\x02\xaa\xaa\xbb\xbb\xcc\xcc\xdd\xdd' )
         #_speed = struct.pack('<h',int(speed)*100)
         #_rpm   = struct.pack('<h',rpm)
@@ -310,6 +315,10 @@ async def run(loop):
         logger.info("cadence: %s, power: %s  speed: %s, HR: %s" % (rpm, power, speed, hr))
         server.get_characteristic(bc.cIndoorBikeDataUUID).value =  bytearray (info)  
         server.update_value(     bc.sFitnessMachineUUID, bc.cIndoorBikeDataUUID    )
+        import random
+        power = random.randrange(100, 300, 5)
+        rpm = random.randrange(50, 70, 2)
+        session_data.append([time,power,rpm,hr,speed])
         if len(queue) > 0:
             if (queue[0][0]=='c'):
                 logger.info(queue)
@@ -328,7 +337,23 @@ async def repeater(): # Here
     await loop.create_task(run(loop)) # "await" is needed
 
 
-
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
-loop.run_until_complete(repeater()) 
+try:
+    loop.run_until_complete(repeater()) 
+except KeyboardInterrupt: 
+    #import csv
+    #filename = str('out-'+datetime.datetime.now().strftime("%Y%m%d-%H%M%S")+'.csv' )
+    #print('SAVING ......')
+    #with open (filename, 'w') as cvsfile:
+    #    wtr = csv.writer(cvsfile, delimiter=';', lineterminator='\n')
+    #    for line in session_data:
+    #        print (line)
+    #        wtr.writerow([line])
+    #print(filename+' SAVED')
+    import TCXexport
+    tcx = TCXexport.clsTcxExport()
+    tcx.Start()                                             
+    for line in session_data:
+        tcx.Trackpoint(HeartRate=line[3], Cadence=line[2], Watts=line[1], SpeedKmh= line[4])
+    tcx.Stop()
