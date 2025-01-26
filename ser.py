@@ -23,10 +23,13 @@ hr    = 0
 power = 25
 rpm = 0
 time = 0
+gear = 4
+_rpm = []
 serial_connected = False
 session_data = []
     
 class Kettler(asyncio.Protocol):
+    
    
     def connection_made(self, transport):
         self.transport = transport
@@ -177,7 +180,7 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         #simpower = 170 * (1 + 1.15 * (rpm - 80.0) / 80.0) * (1.0 + 3 * (grade)/ 100.0)
         #gear = 5
         #simpower = Normalize(simpower * (1.0 + 0.1 * (gear - 5)))
-        simpower = Normalize(makePower(rpm,grade,crr))
+        simpower = Normalize(makePower(rpm,grade,crr,autoGear(rpm)))
         logger.info(f"simpower={simpower}")
         queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
         if (abs(simpower-power)>5):
@@ -193,9 +196,30 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         if serial_connected: 
             queue.append(['s',"PW", Normalize(140)])    
 
-def makePower(rpm,grade,crr):
+def avg(x):
+    z=0
+    for _x in x:
+        z+=_x
+    return (z/4)
+
+def autoGear(rpm):
+    global gear
+    global _rpm
+    _rpm.append(rpm) 
+    if (len(_rpm)>=5):  
+        _rpm = _rpm[1:]
+        if (40<avg(_rpm)<60):
+            gear-=1
+            if (gear==0):gear = 1
+            _rpm = []
+        if (avg(_rpm)>100):
+            gear+=1
+            if (gear==8):gear = 7
+            _rpm = []
+    return gear
+
+def makePower(rpm,grade,crr,gear):
     wheel = 645.0                       #609.6
-    gear  = 4
     speed = int(3.6*gear*0.0166667*wheel*0.001*rpm*10/3600.0*1000.0)
     
     # formula https://www.fiets.nl/training/de-natuurkunde-van-het-fietsen/
@@ -377,4 +401,3 @@ except KeyboardInterrupt:
     #createCSV(session_data)
     createTCX(session_data)
     
-
