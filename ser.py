@@ -3,6 +3,7 @@ import serial_asyncio
 import logging
 from typing import Any, Dict, Union
 import struct
+import subprocess
 from bless import (  # type: ignore
     BlessServer,
     BlessGATTCharacteristic,
@@ -49,7 +50,7 @@ class Kettler(asyncio.Protocol):
         #   queue.append(['s',"PW", power])
         power = int(segments[4])
         energy = int(segments[5])
-        t = segments[6].split('\t')
+        t = segments[6].split(':')
         time = int(t[0])*60+int(t[1])
         realPower = int(segments[7])
         logger.info("time: %s, cadence: %s, power: %s  realPower: %s, HR: %s" % (time, rpm, power, realPower, hr))
@@ -62,10 +63,11 @@ class Kettler(asyncio.Protocol):
         logger.debug(str(_data))
         if b'\n' in data:
             x = "".join(_data)
+            #logger.info(x)
             segments = x.split('\t')
             if len(segments)>=8 :
-                self.translateData(segments)
                 _data.clear()
+                self.translateData(segments)
                 #self.transport.close()
         
     def getstatus(self):
@@ -110,7 +112,7 @@ async def reader():
         serial_connected = False
         logger.info(f"Serial not connected")
     global queue
-    #queue.append(['c',bc.cFitnessMachineControlPointUUID, b'\x80\x05\x01'])
+    queue.append(['c',bc.cFitnessMachineControlPointUUID, b'\x80\x05\x01'])
     queue.append(['s','CM'])
     if not serial_connected: return
     while True:
@@ -280,6 +282,8 @@ async def run(loop):
 }
     global queue
     global serial_connected
+    subprocess.call("powercfg -change -monitor-timeout-ac 180")
+    subprocess.call("powercfg -change -standby-timeout-ac 180")
     my_service_name = "Kettler-APP"
     server = BlessServer(name=my_service_name, loop=loop)
     server.read_request_func = read_request
@@ -308,6 +312,7 @@ async def run(loop):
         #send=send.replace(b'\xdd\xdd', _hr)
         flags = (bc.ibd_InstantaneousCadencePresent | bc.ibd_InstantaneousPowerPresent)
         s     = int(speed * 100) & 0xffff      # Avoid value anomalities
+        s = 0xffff
         c     = int(rpm*2 )      & 0xffff      # Avoid value anomalities
         p     = int(power)       & 0xffff      # Avoid value anomalities
         info  = struct.pack (bc.little_endian + bc.unsigned_short * 4, flags, s, c, p)
@@ -315,9 +320,9 @@ async def run(loop):
         logger.info("cadence: %s, power: %s  speed: %s, HR: %s" % (rpm, power, speed, hr))
         server.get_characteristic(bc.cIndoorBikeDataUUID).value =  bytearray (info)  
         server.update_value(     bc.sFitnessMachineUUID, bc.cIndoorBikeDataUUID    )
-        import random
-        power = random.randrange(100, 300, 5)
-        rpm = random.randrange(50, 70, 2)
+        #import random
+        #power = random.randrange(100, 300, 5)
+        #rpm = random.randrange(50, 70, 2)
         session_data.append([time,power,rpm,hr,speed])
         if len(queue) > 0:
             if (queue[0][0]=='c'):
@@ -331,6 +336,31 @@ async def run(loop):
         await asyncio.sleep(1)
     await server.stop()
 
+
+def createCSV(session_data):
+    import csv
+    filename = str('out-'+datetime.datetime.now().strftime("%Y%m%d-%H%M%S")+'.csv' )
+    print('SAVING ......')
+    with open (filename, 'w') as cvsfile:
+        wtr = csv.writer(cvsfile, delimiter=';', lineterminator='\n')
+        for line in session_data:
+            print (line)
+            wtr.writerow([line])
+    print(filename+' SAVED')
+
+def createTCX(session_data):
+    import TCXexport
+    tcx = TCXexport.clsTcxExport()
+    tcx.Start()   
+    now = datetime.datetime.utcnow()
+    j = len (session_data)
+    for line in session_data:
+        tcx.Trackpoint(Time = now - datetime.timedelta(0,j), HeartRate=line[3], Cadence=line[2], Watts=line[1], SpeedKmh= line[4])
+        j -= 1
+    tcx.Stop()
+    
+    
+    
 async def repeater(): # Here
     loop = asyncio.get_running_loop()
     loop.create_task(reader()) # Here
@@ -342,18 +372,9 @@ asyncio.set_event_loop(loop)
 try:
     loop.run_until_complete(repeater()) 
 except KeyboardInterrupt: 
-    #import csv
-    #filename = str('out-'+datetime.datetime.now().strftime("%Y%m%d-%H%M%S")+'.csv' )
-    #print('SAVING ......')
-    #with open (filename, 'w') as cvsfile:
-    #    wtr = csv.writer(cvsfile, delimiter=';', lineterminator='\n')
-    #    for line in session_data:
-    #        print (line)
-    #        wtr.writerow([line])
-    #print(filename+' SAVED')
-    import TCXexport
-    tcx = TCXexport.clsTcxExport()
-    tcx.Start()                                             
-    for line in session_data:
-        tcx.Trackpoint(HeartRate=line[3], Cadence=line[2], Watts=line[1], SpeedKmh= line[4])
-    tcx.Stop()
+    subprocess.call("powercfg -change -monitor-timeout-ac 10")
+    subprocess.call("powercfg -change -standby-timeout-ac 30")
+    #createCSV(session_data)
+    createTCX(session_data)
+    
+
