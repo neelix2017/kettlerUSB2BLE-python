@@ -238,8 +238,9 @@ def autoGear(rpm):
     return gearbox[gear]
 
 def makePower(rpm,grade,crr,gear):
-    wheel = 645.0                       #609.6
-    speed = int(3.6*gear*0.0166667*wheel*0.001*rpm*10/3600.0*1000.0)
+    wheel = 622                       
+    circ = (wheel + 28 * 2)*3.141592653
+    speed = int(circ * rpm * gear * 60 / 1000000)
     
     # formula https://www.fiets.nl/training/de-natuurkunde-van-het-fietsen/
     
