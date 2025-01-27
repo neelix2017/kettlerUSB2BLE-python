@@ -200,22 +200,30 @@ def avg(x):
     z=0
     for _x in x:
         z+=_x
-    return (z/4)
+    return (z/len(x))
 
 def autoGear(rpm):
     global gear
     global _rpm
-    _rpm.append(rpm) 
-    if (len(_rpm)>=5):  
-        _rpm = _rpm[1:]
-        if (40<avg(_rpm)<60):
-            gear-=1
-            if (gear==0):gear = 1
-            _rpm = []
-        if (avg(_rpm)>100):
-            gear+=1
-            if (gear==8):gear = 7
-            _rpm = []
+    
+    if (40<rpm<60):
+        _rpm.append(rpm)
+        if (len(_rpm)>=5):
+            _rpm = _rpm[1:]
+            if (40<avg(_rpm)<60):
+                gear-=1
+                if (gear==0):gear = 1
+                _rpm = []
+    elif (rpm>100):
+        _rpm.append(rpm)
+        if (len(_rpm)>=5):
+            _rpm = _rpm[1:]
+            if (avg(_rpm)>100):
+                gear+=1
+                if (gear==8):gear = 7
+                _rpm = []
+    else:
+        _rpm = []
     return gear
 
 def makePower(rpm,grade,crr,gear):
