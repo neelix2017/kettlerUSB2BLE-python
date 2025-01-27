@@ -26,7 +26,7 @@ hr    = 0
 power = 25
 rpm = 0
 time = 0
-gear = 6
+gear = 4
 _rpm = []
 serial_connected = False
 gained_control = False
@@ -135,7 +135,7 @@ async def reader():
     while True:
         if len(queue) > 0:
             if (queue[0][0]=='s'):
-                logger.info(queue)
+                logger.debug(queue)
                 if (queue[0][1]=='PW'):
                     protocol.askState(queue[0][2])
                 if (queue[0][1]=='ST'):
@@ -200,7 +200,7 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         #simpower = 170 * (1 + 1.15 * (rpm - 80.0) / 80.0) * (1.0 + 3 * (grade)/ 100.0)
         #gear = 5
         #simpower = Normalize(simpower * (1.0 + 0.1 * (gear - 5)))
-        simpower = makePower(rpm,grade,crr,autoGear(rpm))
+        simpower = makePower(rpm,grade,crr,w,wind,autoGear(rpm))
         logger.info(f"BLE notified info   =   wind:{wind}, grade:{grade},crr:{crr},w:{w}            calculate simpower={simpower}, gear={gear}")
         queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
         if (abs(simpower-power)>5):
@@ -247,7 +247,7 @@ def autoGear(rpm):
         _rpm = []
     return bike.ratio(gear)
 
-def makePower(rpm,grade,crr,gear):
+def makePower(rpm,grade,crr,p_cdA_d,wind,gear):
     pi              =  3.141592653
     circ            = (bike.wheel + 28 * 2) * pi
     speed           = int(circ * rpm * gear * 60 / 1000000)
@@ -262,10 +262,11 @@ def makePower(rpm,grade,crr,gear):
     Proll           = c * m * g * v                   # Watt
     p               = 1.205                           # air-density
     cdA             = 0.3                             # resistance factor
-                                            # p_cdA = 0.375
-    w               =  0                              # wind-speed
+                                                      # p_cdA = 0.375
+    w               =  wind/3.6                       # wind-speed
+    
     # zračni upor
-    Pair            = 0.5 * p * cdA * (v+w)*(v+w)* v  # Watt
+    Pair            = 0.5 * p_cdA_d * (v+w)*abs(v+w)* v  # Watt
     # upor strmine
     i               = grade/100                       # Percentage 0...100
     Pslope          = i * m * g * v                   # Watt
@@ -385,7 +386,7 @@ async def run(loop):
                 _min=90
                 _max=110
             rpm = random.randrange(_min, _max, 2)
-            power = makePower(rpm,0,0.004,autoGear(rpm))
+            power = makePower(rpm,0,0.004,0.4,0,autoGear(rpm))
             global gear
             logger.info(f"gear={gear}")
         
