@@ -205,22 +205,23 @@ def avg(x):
 def autoGear(rpm):
     global gear
     global _rpm
-    
-    if (40<rpm<60):
+    #           50x11  50x13  50x15  50x17  50x19  34x15  34x17  34x19  34x21  34x23  34x25  34x27  34x30  34x34
+    gearbox = [  4.55,  3.85,  3.33,  2.94,  2.63,  2.27,  2.00,  1.79,  1.62,  1.48,  1.36,  1.26,  1.13,  1.06]    
+    if (20<rpm<60):
         _rpm.append(rpm)
         if (len(_rpm)>=5):
             _rpm = _rpm[1:]
             if (40<avg(_rpm)<60):
-                gear-=1
-                if (gear==0):gear = 1
+                gear+=1
+                if (gear==14):gear = 13
                 _rpm = []
     elif (rpm>100):
         _rpm.append(rpm)
         if (len(_rpm)>=5):
             _rpm = _rpm[1:]
             if (avg(_rpm)>100):
-                gear+=1
-                if (gear==8):gear = 7
+                gear-=1
+                if (gear==-1):gear = 0
                 _rpm = []
     else:
         _rpm = []
