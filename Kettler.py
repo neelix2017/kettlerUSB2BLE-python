@@ -15,6 +15,7 @@ import bikeConstants        as bike
 import datetime,time
 import io
 import winsound
+import random
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(name=__name__)
@@ -25,9 +26,10 @@ hr    = 0
 power = 25
 rpm = 0
 time = 0
-gear = 4
+gear = 6
 _rpm = []
 serial_connected = False
+gained_control = False
 session_data = []
     
 class Kettler(asyncio.Protocol):
@@ -47,19 +49,22 @@ class Kettler(asyncio.Protocol):
         global time
         # heartRate cadence speed distanceInFunnyUnits destPower energy timeElapsed realPower
         # 000 052 095 000 030 0001 00:12 030
-        hr = int(segments[0])
-        rpm = int(segments[1])
-        speed = int(segments[2])*0.1
-        distance = (segments[3])
-        #if (power != Normalize(int(segments[4]))):
-        #   queue.append(['s',"PW", power])
-        power = int(segments[4])
-        energy = int(segments[5])
-        t = segments[6].split(':')
-        time = int(t[0])*60+int(t[1])
-        realPower = int(segments[7])
-        logger.info("time: %s, cadence: %s, power: %s  realPower: %s, HR: %s" % (time, rpm, power, realPower, hr))
-        
+        try:
+            hr = int(segments[0])
+            rpm = int(segments[1])
+            speed = int(segments[2])*0.1
+            distance = (segments[3])
+            #if (power != Normalize(int(segments[4]))):
+            #   queue.append(['s',"PW", power])
+            power = int(segments[4])
+            energy = int(segments[5])
+            t = segments[6].split(':')
+            time = int(t[0])*60+int(t[1])
+            realPower = int(segments[7])
+            logger.info("Kettler responds =   time: %s, cadence: %s, power: %s  realPower: %s, HR: %s" % (time, rpm, power, realPower, hr))
+        except Exception as e:
+            logger.info(f"Unknown response "+str(segments))
+
         
     def data_received(self, data):
         global _data
@@ -79,15 +84,21 @@ class Kettler(asyncio.Protocol):
         self.transport.write(b'ST\r\n')
         
     def reset(self):
+        self.transport.write(b'RS\r\n')
+        
+    def init(self):
         self.transport.write(b'CM\r\n')
         
-    def setPower(self, power):
-        self.transport.write(bytes('PW'+str(power)+'\r\n','utf-8'))
-        
-    def askState(self):
+    def setPower(self, p):
         global power
-        if (False) :
-            self.setPower(power)
+        power = p
+        p = bytes('PW '+str(p)+'\n','UTF-8')
+        logger.info("power "+str(p))
+        self.transport.write(p)
+        
+    def askState(self, setpower):
+        if (setpower!=0) :
+            self.setPower(setpower)
         else :
             self.getstatus()
 
@@ -110,6 +121,7 @@ class Kettler(asyncio.Protocol):
 
 async def reader():
     global serial_connected
+    global gained_control
     try:
         transport, protocol = await serial_asyncio.create_serial_connection(loop, Kettler, 'COM3', baudrate=9600)
         serial_connected = True
@@ -125,11 +137,16 @@ async def reader():
             if (queue[0][0]=='s'):
                 logger.info(queue)
                 if (queue[0][1]=='PW'):
-                    protocol.setPower(queue[0][2])
+                    protocol.askState(queue[0][2])
                 if (queue[0][1]=='ST'):
-                    protocol.askState()
+                    protocol.askState(0)
                 if (queue[0][1]=='CM'):
                     protocol.reset()
+                    await asyncio.sleep(5)
+                    protocol.init()
+                    await asyncio.sleep(1)
+                    gained_control = True
+                    queue.append(['s','PW',100])
                 queue = queue[1:]
         await asyncio.sleep(1)
         #protocol.askState()
@@ -145,12 +162,13 @@ def read_request(characteristic: BlessGATTCharacteristic, **kwargs) -> bytearray
 
 def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs):
     characteristic.value = value
+    global gear
     global speed
     global rpm
     global hr
     global power
     global serial_connected
-    logger.info(f"[{characteristic.uuid}] Char value set to {characteristic.value}")
+    logger.debug(f"[{characteristic.uuid}] Char value set to {characteristic.value}")
     if characteristic.value == b"\x00":  #request control
         logger.debug("request control")
         response = b'\x80\x00\x01'
@@ -183,12 +201,11 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         #gear = 5
         #simpower = Normalize(simpower * (1.0 + 0.1 * (gear - 5)))
         simpower = makePower(rpm,grade,crr,autoGear(rpm))
-        logger.info(f"simpower={simpower}")
+        logger.info(f"BLE notified info   =   wind:{wind}, grade:{grade},crr:{crr},w:{w}            calculate simpower={simpower}, gear={gear}")
         queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
         if (abs(simpower-power)>5):
-            power = simpower
             if serial_connected: 
-                queue.append(['s',"PW", power])
+                queue.append(['s',"PW", simpower])
     elif characteristic.value[0] == 5:  #set target power
         logger.debug("set target power")
         response = b'\x80\x05\x01'
@@ -212,7 +229,7 @@ def autoGear(rpm):
         _rpm.append(rpm)
         if (len(_rpm)>=5):
             _rpm = _rpm[1:]
-            if (40<avg(_rpm)<60):
+            if (20<avg(_rpm)<60):
                 gear+=1
                 winsound.Beep(2500, 200)
                 if (gear==14):gear = 13
@@ -223,18 +240,18 @@ def autoGear(rpm):
             _rpm = _rpm[1:]
             if (avg(_rpm)>100):
                 gear-=1
-                winsound.Beep(5000, 200)
+                winsound.Beep(4000, 200)
                 if (gear==-1):gear = 0
                 _rpm = []
     else:
         _rpm = []
-    return bike.ratio(bike.gearbox[gear])
+    return bike.ratio(gear)
 
 def makePower(rpm,grade,crr,gear):
     pi              =  3.141592653
     circ            = (bike.wheel + 28 * 2) * pi
     speed           = int(circ * rpm * gear * 60 / 1000000)
-    
+
     # formula https://www.fiets.nl/training/de-natuurkunde-van-het-fietsen/  
     c               = crr     #0.004                  # roll-resistance constant
     mm              = 93                              # riders weight kg
@@ -251,14 +268,15 @@ def makePower(rpm,grade,crr,gear):
     Pair            = 0.5 * p * cdA * (v+w)*(v+w)* v  # Watt
     # upor strmine
     i               = grade/100                       # Percentage 0...100
-    Pslope          = i * m * g * v               # Watt
+    Pslope          = i * m * g * v                   # Watt
     # mehanski upor (veriga, pesto)
-    Pbike           = 37                              # bike effi
-    return Normalize(Proll + Pair + Pslope + Pbike)
+    #Pbike           = 37                              # bike effi
+    Pbike = 1.015
+    return Normalize((Proll + Pair + Pslope) * Pbike)
     
 
 def Normalize(x, base=5,max = 400):
-    if (x<0): x = 0
+    if (x<25): x = 25
     if (x>max): x = max
     return base * round(x/base)
 
@@ -350,21 +368,36 @@ async def run(loop):
         p     = int(power)       & 0xffff      # Avoid value anomalities
         info  = struct.pack (bc.little_endian + bc.unsigned_short * 4, flags, s, c, p)
         logger.debug("%s", info)
-        logger.info("cadence: %s, power: %s  speed: %s, HR: %s" % (rpm, power, speed, hr))
+        logger.info("Sent to BLE      =    cadence: %s, power: %s  speed: %s, HR: %s" % (rpm, power, speed, hr))
         server.get_characteristic(bc.cIndoorBikeDataUUID).value =  bytearray (info)  
         server.update_value(     bc.sFitnessMachineUUID, bc.cIndoorBikeDataUUID    )
-        #import random
-        #power = random.randrange(100, 300, 5)
-        #rpm = random.randrange(50, 70, 2)
+        
+        if not serial_connected :
+            _min = rpm-15
+            _max = _min+15
+            if (power>350):
+                _min-=40
+                _max-=40
+            elif (power>240):
+                _min-=20
+                _max-=20
+            elif (power<100):
+                _min=90
+                _max=110
+            rpm = random.randrange(_min, _max, 2)
+            power = makePower(rpm,0,0.004,autoGear(rpm))
+            global gear
+            logger.info(f"gear={gear}")
+        
         session_data.append([time,power,rpm,hr,speed])
         if len(queue) > 0:
             if (queue[0][0]=='c'):
-                logger.info(queue)
+                logger.debug(queue)
                 server.get_characteristic(queue[0][1]).value =  bytearray (queue[0][2])  
                 server.update_value(     bc.sFitnessMachineUUID, queue[0][1]    )
                 queue = queue[1:]
         if serial_connected:
-            if (len(queue) ==0):
+            if (len(queue) ==0 and gained_control):
                 queue.append(['s',"ST"])
         await asyncio.sleep(1)
     await server.stop()
