@@ -235,7 +235,7 @@ def autoGear(rpm):
                 _rpm = []
     else:
         _rpm = []
-    return gear
+    return gearbox[gear]
 
 def makePower(rpm,grade,crr,gear):
     wheel = 645.0                       #609.6
