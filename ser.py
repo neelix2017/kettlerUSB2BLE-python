@@ -13,6 +13,7 @@ from bless import (  # type: ignore
 import bleConstants         as bc
 import datetime,time
 import io
+import winsound
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(name=__name__)
@@ -223,6 +224,7 @@ def autoGear(rpm):
             _rpm = _rpm[1:]
             if (40<avg(_rpm)<60):
                 gear+=1
+                winsound.Beep(2500, 200)
                 if (gear==14):gear = 13
                 _rpm = []
     elif (rpm>100):
@@ -231,6 +233,7 @@ def autoGear(rpm):
             _rpm = _rpm[1:]
             if (avg(_rpm)>100):
                 gear-=1
+                winsound.Beep(5000, 200)
                 if (gear==-1):gear = 0
                 _rpm = []
     else:
