@@ -16,8 +16,14 @@ import datetime,time
 import io
 import winsound
 import random
+import keyboard
 
-logging.basicConfig(level=logging.INFO)
+#logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(filename="Kettler.log",
+                    filemode='a',
+                    format='%(asctime)s,%(msecs)03d %(name)s %(levelname)s %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S',
+                    level=logging.DEBUG)
 logger = logging.getLogger(name=__name__)
 _data = []
 queue = []
@@ -30,6 +36,7 @@ gear = 4
 _rpm = []
 serial_connected = False
 gained_control = False
+running = True
 session_data = []
 _uuid = []
     
@@ -63,9 +70,9 @@ class Kettler(asyncio.Protocol):
             t = segments[6].split(':')
             time = int(t[0])*60+int(t[1])
             realPower = int(segments[7])
-            logger.info("Kettler responds =   time: %s, cadence: %s, power: %s  realPower: %s, HR: %s" % (time, rpm, power, realPower, hr))
+            logger.debug("Kettler responds =   time: %s, cadence: %s, power: %s  realPower: %s, HR: %s" % (time, rpm, power, realPower, hr))
         except Exception as e:
-            logger.info(f"Unknown response "+str(segments))
+            logger.debug(f"Unknown response "+str(segments))
 
         
     def data_received(self, data):
@@ -95,7 +102,7 @@ class Kettler(asyncio.Protocol):
         global power
         power = p
         p = bytes('PW '+str(p)+'\n','UTF-8')
-        logger.info("power "+str(p))
+        logger.debug("power "+str(p))
         self.transport.write(p)
         
     def askState(self, setpower):
@@ -124,17 +131,18 @@ class Kettler(asyncio.Protocol):
 async def reader():
     global serial_connected
     global gained_control
+    global running
     try:
         transport, protocol = await serial_asyncio.create_serial_connection(loop, Kettler, 'COM3', baudrate=9600)
         serial_connected = True
     except Exception as e:
         serial_connected = False
-        logger.info(f"Serial not connected")
+        logger.debug(f"Serial not connected")
     global queue
     queue.append(['c',bc.cFitnessMachineControlPointUUID, b'\x80\x05\x01'])
     queue.append(['s','CM'])
     if not serial_connected: return
-    while True:
+    while running:
         if len(queue) > 0:
             if (queue[0][0]=='s'):
                 logger.debug(queue)
@@ -156,7 +164,7 @@ async def reader():
 
 
 def read_request(characteristic: BlessGATTCharacteristic, **kwargs) -> bytearray:
-    logger.info(f" [{characteristic.uuid}] Read request recieved {characteristic.value}")
+    logger.debug(f" [{characteristic.uuid}] Read request recieved {characteristic.value}")
     if (characteristic.uuid not in _uuid):
         winsound.PlaySound('Kettler_gears\\device_subscribed.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
         _uuid.append(characteristic.uuid)
@@ -206,7 +214,7 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         #gear = 5
         #simpower = Normalize(simpower * (1.0 + 0.1 * (gear - 5)))
         simpower = makePower(rpm,grade,crr,w,wind,autoGear(rpm))
-        logger.info(f"BLE notified info   =   wind:{wind}, grade:{grade},crr:{crr},w:{w}            calculate simpower={simpower}, gear={gear}")
+        logger.debug(f"BLE notified info   =   wind:{wind}, grade:{grade},crr:{crr},w:{w}            calculate simpower={simpower}, gear={gear}")
         queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
         if (abs(simpower-power)>5):
             if serial_connected: 
@@ -217,7 +225,7 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         response = b'\x80\x05\x01'
         pw = io.BytesIO(bytearray(value)).read(2)
         power = struct.unpack("<H",  pw)  
-        logger.info(pw)
+        logger.debug(pw)
         if serial_connected: 
             queue.append(['s',"PW", Normalize(100)])    
 
@@ -342,8 +350,16 @@ async def run(loop):
         }
     }
 }
+    global speed
+    global rpm
+    global hr
+    global power
+    global time
+    global session_data
+    global running
     global queue
     global serial_connected
+    global gear
     my_service_name = "Kettler-APP"
     server = BlessServer(name=my_service_name, loop=loop)
     server.read_request_func = read_request
@@ -354,13 +370,7 @@ async def run(loop):
     logger.debug("Advertising")
     await asyncio.sleep(3)
     #84-24-FA-00-00-00-00-00-00-00-00-00-00-00-00-00-00
-    while (True):
-        global speed
-        global rpm
-        global hr
-        global power
-        global time
-        global session_data
+    while (running):
         #send = ( b'\x44\x02\xaa\xaa\xbb\xbb\xcc\xcc\xdd\xdd' )
         #_speed = struct.pack('<h',int(speed)*100)
         #_rpm   = struct.pack('<h',rpm)
@@ -377,7 +387,8 @@ async def run(loop):
         p     = int(power)       & 0xffff      # Avoid value anomalities
         info  = struct.pack (bc.little_endian + bc.unsigned_short * 4, flags, s, c, p)
         logger.debug("%s", info)
-        logger.info("Sent to BLE      =    cadence: %s, power: %s  speed: %s, HR: %s" % (rpm, power, speed, hr))
+        logger.debug("Sent to BLE      =    cadence: %s, power: %s  speed: %s, HR: %s" % (rpm, power, speed, hr))
+        print("cadence: {:03d}, power: {:03d}  speed: {:03d}, HR: {:03d},       gear: {:02d}".format (rpm, power, speed, hr, gear+1),end='\r')
         server.get_characteristic(bc.cIndoorBikeDataUUID).value =  bytearray (info)  
         server.update_value(     bc.sFitnessMachineUUID, bc.cIndoorBikeDataUUID    )
         
@@ -395,8 +406,7 @@ async def run(loop):
                 _max=110
             rpm = random.randrange(_min, _max, 2)
             power = makePower(rpm,0,0.004,0.4,0,autoGear(rpm))
-            global gear
-            logger.info(f"gear={gear}")
+            #logger.info(f"gear={gear}")
         
         session_data.append([time,power,rpm,hr,speed])
         if len(queue) > 0:
@@ -443,14 +453,34 @@ async def repeater(): # Here
     await loop.create_task(run(loop)) # "await" is needed
 
 
-
-
+def pressed_keys(e):
+    global gear
+    global running
+    if (e.event_type=='down'):
+        if (e.name=='shift'):
+            gear += 1
+            if (gear>=14):gear = 13
+            winsound.PlaySound('Kettler_gears\\'+str(gear+1)+'.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
+        if (e.name=='ctrl') :
+            gear -= 1
+            if (gear<=-1):gear = 0
+            winsound.PlaySound('Kettler_gears\\'+str(gear+1)+'.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
+        if (e.name== 'space'):winsound.PlaySound('Kettler_gears\\'+str(gear+1)+'.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
+        if (e.name=='esc'):
+            running=False
 
 
 if __name__ == "__main__": 
+    keyboard.hook(pressed_keys)
+    print("                                      ")
     print("                                      ")
     print("                                      ")
     print("                    START             ")
+    print("                                      ")
+    print("                                      ")
+    print("shift = gear up")
+    print("ctrl  = gear down")
+    print("esc   = stop")
     print("                                      ")
     print("                                      ")
     subprocess.call("powercfg -change -monitor-timeout-ac 180")
@@ -460,9 +490,12 @@ if __name__ == "__main__":
     try:
         loop.run_until_complete(repeater()) 
     except KeyboardInterrupt: 
+        print('\r\n\r\nbreak')
+    finally:
         subprocess.call("powercfg -change -monitor-timeout-ac 10")
         subprocess.call("powercfg -change -standby-timeout-ac 30")
         #createCSV(session_data)
         createTCX(session_data)
         winsound.PlaySound('Kettler_gears\\disconnected.wav',  winsound.SND_FILENAME)
+        keyboard.unhook_all()
         
