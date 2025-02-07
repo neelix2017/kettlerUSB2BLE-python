@@ -39,7 +39,7 @@ class Kettler(asyncio.Protocol):
     def connection_made(self, transport):
         self.transport = transport
         logger.debug('port opened', transport)
-        winsound.PlaySound('Kettler_gears\\connected.wav', winsound.SND_FILENAME)
+        winsound.PlaySound('Kettler_gears\\connected.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
         transport.serial.rts = True  # You can manipulate Serial object via transport
         #transport.write(b'ST\r\n')  # Write serial data via transport
     
@@ -158,7 +158,7 @@ async def reader():
 def read_request(characteristic: BlessGATTCharacteristic, **kwargs) -> bytearray:
     logger.info(f" [{characteristic.uuid}] Read request recieved {characteristic.value}")
     if (characteristic.uuid not in _uuid):
-        winsound.PlaySound('Kettler_gears\\device_subscribed.wav', winsound.SND_FILENAME)
+        winsound.PlaySound('Kettler_gears\\device_subscribed.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
         _uuid.append(characteristic.uuid)
     # b'\x02@\x00\x00\x08 \x00\x00'
     
@@ -210,6 +210,7 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
         if (abs(simpower-power)>5):
             if serial_connected: 
+                #winsound.Beep(4000, 100)
                 queue.append(['s',"PW", simpower])
     elif characteristic.value[0] == 5:  #set target power
         logger.debug("set target power")
@@ -233,23 +234,23 @@ def autoGear(rpm):
     if (20<rpm<60):
         _rpm.append(rpm)
         if (len(_rpm)>=5):
-            _rpm = _rpm[1:]
-            if (20<avg(_rpm)<60):
-                gear+=1
-                #winsound.Beep(2500, 200)
-                if (gear==14):gear = 13
-                winsound.PlaySound('Kettler_gears\\'+str(gear+1)+'.wav', winsound.SND_FILENAME)
-                _rpm = []
-    elif (rpm>95):
+            #_rpm = _rpm[1:]
+            #if (20<avg(_rpm)<60):
+            gear+=1
+            #winsound.Beep(2500, 200)
+            if (gear>=14):gear = 13
+            winsound.PlaySound('Kettler_gears\\'+str(gear+1)+'.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
+            _rpm = []
+    elif (rpm>94):
         _rpm.append(rpm)
         if (len(_rpm)>=3):
-            _rpm = _rpm[1:]
-            if (avg(_rpm)>100):
-                gear-=1
-                #winsound.Beep(4000, 200)
-                if (gear==-1):gear = 0
-                winsound.PlaySound('Kettler_gears\\'+str(gear+1)+'.wav', winsound.SND_FILENAME)
-                _rpm = []
+            #_rpm = _rpm[1:]
+            #if (avg(_rpm)>94):
+            gear-=1
+            #winsound.Beep(4000, 200)
+            if (gear<=-1):gear = 0
+            winsound.PlaySound('Kettler_gears\\'+str(gear+1)+'.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
+            _rpm = []
     else:
         _rpm = []
     return bike.ratio(gear)
@@ -463,5 +464,5 @@ if __name__ == "__main__":
         subprocess.call("powercfg -change -standby-timeout-ac 30")
         #createCSV(session_data)
         createTCX(session_data)
-        winsound.PlaySound('Kettler_gears\\disconnected.wav', winsound.SND_FILENAME)
+        winsound.PlaySound('Kettler_gears\\disconnected.wav',  winsound.SND_FILENAME)
         
