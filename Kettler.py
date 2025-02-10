@@ -41,11 +41,11 @@ session_data = []
 _uuid = []
     
 class Kettler(asyncio.Protocol):
-    
+
    
     def connection_made(self, transport):
         self.transport = transport
-        logger.debug('port opened', transport)
+        logger.debug('port opened')
         winsound.PlaySound('Kettler_gears\\connected.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
         transport.serial.rts = True  # You can manipulate Serial object via transport
         #transport.write(b'ST\r\n')  # Write serial data via transport
@@ -77,7 +77,7 @@ class Kettler(asyncio.Protocol):
         
     def data_received(self, data):
         global _data
-        logger.debug('data received', repr(data))
+        #logger.debug('data received', repr(data))
         _data.append(data.decode("utf-8"))
         logger.debug(str(_data))
         if b'\n' in data:
@@ -388,7 +388,7 @@ async def run(loop):
         info  = struct.pack (bc.little_endian + bc.unsigned_short * 4, flags, s, c, p)
         logger.debug("%s", info)
         logger.debug("Sent to BLE      =    cadence: %s, power: %s  speed: %s, HR: %s" % (rpm, power, speed, hr))
-        print("cadence: {:03d}, power: {:03d}  speed: {:03d}, HR: {:03d},       gear: {:02d}".format (rpm, power, speed, hr, gear+1),end='\r')
+        print("cadence: {:03d}, power: {:03d}  speed: {:03d}, HR: {:03d},       gear: {:02d}".format (rpm, power, int(speed), hr, gear+1),end='\r')
         server.get_characteristic(bc.cIndoorBikeDataUUID).value =  bytearray (info)  
         server.update_value(     bc.sFitnessMachineUUID, bc.cIndoorBikeDataUUID    )
         
