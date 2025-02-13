@@ -71,6 +71,7 @@ class Kettler(asyncio.Protocol):
             time = int(t[0])*60+int(t[1])
             realPower = int(segments[7])
             logger.debug("Kettler responds =   time: %s, cadence: %s, power: %s  realPower: %s, HR: %s" % (time, rpm, power, realPower, hr))
+            autoGear(rpm)
         except Exception as e:
             logger.debug(f"Unknown response "+str(segments))
 
@@ -214,7 +215,7 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         #simpower = 170 * (1 + 1.15 * (rpm - 80.0) / 80.0) * (1.0 + 3 * (grade)/ 100.0)
         #gear = 5
         #simpower = Normalize(simpower * (1.0 + 0.1 * (gear - 5)))
-        simpower = makePower(rpm,grade,crr,w,wind,autoGear(rpm))
+        simpower = makePower(rpm,grade,crr,w,wind,bike.ratio(gear))
         logger.debug(f"BLE notified info   =   wind:{wind}, grade:{grade},crr:{crr},w:{w}            calculate simpower={simpower}, gear={gear}")
         if (abs(simpower-power)>5):
             if serial_connected: 
@@ -263,7 +264,6 @@ def autoGear(rpm):
             _rpm = []
     else:
         _rpm = []
-    return bike.ratio(gear)
 
 def makePower(rpm,grade,crr,p_cdA_d,wind,gear):
     pi              =  3.141592653
@@ -407,7 +407,7 @@ async def run(loop):
                 _min=90
                 _max=110
             rpm = random.randrange(_min, _max, 2)
-            power = makePower(rpm,0,0.004,0.4,0,autoGear(rpm))
+            power = makePower(rpm,0,0.004,0.4,0,bike.ratio(gear))
             #logger.info(f"gear={gear}")
         
         session_data.append([time,power,rpm,hr,speed])
