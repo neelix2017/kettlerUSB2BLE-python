@@ -115,6 +115,7 @@ class Kettler(asyncio.Protocol):
 
     def connection_lost(self, exc):
         print('port closed')
+        winsound.PlaySound('Kettler_gears\\disconnected.wav',  winsound.SND_FILENAME)
         self.transport.loop.stop()
 
     def pause_writing(self):
@@ -215,19 +216,20 @@ def write_request(characteristic: BlessGATTCharacteristic, value: Any, **kwargs)
         #simpower = Normalize(simpower * (1.0 + 0.1 * (gear - 5)))
         simpower = makePower(rpm,grade,crr,w,wind,autoGear(rpm))
         logger.debug(f"BLE notified info   =   wind:{wind}, grade:{grade},crr:{crr},w:{w}            calculate simpower={simpower}, gear={gear}")
-        queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
         if (abs(simpower-power)>5):
             if serial_connected: 
                 #winsound.Beep(4000, 100)
                 queue.append(['s',"PW", simpower])
+                queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
     elif characteristic.value[0] == 5:  #set target power
         logger.debug("set target power")
         response = b'\x80\x05\x01'
         pw = io.BytesIO(bytearray(value)).read(2)
-        power = struct.unpack("<H",  pw)  
-        logger.debug(pw)
+        power = struct.unpack(bc.little_endian + unsigned_char*2,  pw)[1]  
+        logger.debug(f"Instructed to set power : {power}")
         if serial_connected: 
-            queue.append(['s',"PW", Normalize(100)])    
+            queue.append(['s',"PW", Normalize(power)]) 
+            queue.append(['c',bc.cFitnessMachineControlPointUUID, response])  
 
 def avg(x):
     z=0
@@ -457,11 +459,11 @@ def pressed_keys(e):
     global gear
     global running
     if (e.event_type=='down'):
-        if (e.name=='shift'):
+        if (e.name=='shift' or e.name=='enter'):
             gear += 1
             if (gear>=14):gear = 13
             winsound.PlaySound('Kettler_gears\\'+str(gear+1)+'.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
-        if (e.name=='ctrl') :
+        if (e.name=='ctrl' or e.event_type=='volume up') :
             gear -= 1
             if (gear<=-1):gear = 0
             winsound.PlaySound('Kettler_gears\\'+str(gear+1)+'.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
@@ -471,6 +473,7 @@ def pressed_keys(e):
 
 
 if __name__ == "__main__": 
+
     keyboard.hook(pressed_keys)
     print("                                      ")
     print("                                      ")
@@ -496,6 +499,5 @@ if __name__ == "__main__":
         subprocess.call("powercfg -change -standby-timeout-ac 30")
         #createCSV(session_data)
         createTCX(session_data)
-        winsound.PlaySound('Kettler_gears\\disconnected.wav',  winsound.SND_FILENAME)
         keyboard.unhook_all()
         
