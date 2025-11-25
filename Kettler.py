@@ -18,6 +18,8 @@ import winsound
 import random
 import keyboard
 
+asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 #logging.basicConfig(level=logging.DEBUG)
 logging.basicConfig(filename="Kettler.log",
                     filemode='a',
@@ -116,8 +118,9 @@ class Kettler(asyncio.Protocol):
 
     def connection_lost(self, exc):
         print('port closed')
-        winsound.PlaySound('Kettler_gears\\disconnected.wav',  winsound.SND_FILENAME)
-        self.transport.loop.stop()
+        winsound.PlaySound('Kettler_gears\\disconnected.wav',  winsound.SND_FILENAME | winsound.SND_ASYNC)
+        #self.transport.loop.stop()
+        running = False   # signal main loop to exit safely
 
     def pause_writing(self):
         print('pause writing')
@@ -134,35 +137,45 @@ async def reader():
     global serial_connected
     global gained_control
     global running
-    try:
-        transport, protocol = await serial_asyncio.create_serial_connection(loop, Kettler, 'COM3', baudrate=9600)
-        serial_connected = True
-    except Exception as e:
-        serial_connected = False
-        logger.debug(f"Serial not connected")
     global queue
-    queue.append(['c',bc.cFitnessMachineControlPointUUID, b'\x80\x05\x01'])
-    queue.append(['s','CM'])
-    if not serial_connected: return
     while running:
-        if len(queue) > 0:
-            if (queue[0][0]=='s'):
-                logger.debug(queue)
-                if (queue[0][1]=='PW'):
-                    protocol.askState(queue[0][2])
-                if (queue[0][1]=='ST'):
-                    protocol.askState(0)
-                if (queue[0][1]=='CM'):
-                    protocol.reset()
-                    await asyncio.sleep(5)
-                    protocol.init()
-                    await asyncio.sleep(1)
-                    gained_control = True
-                    queue.append(['s','PW',100])
-                queue = queue[1:]
-        await asyncio.sleep(1)
-        #protocol.askState()
-        
+        try:
+            print("Connecting to serial port COM3...")
+            transport, protocol = await serial_asyncio.create_serial_connection(
+                loop, Kettler, 'COM3', baudrate=9600
+            )
+
+            serial_connected = True
+            gained_control = False
+            print("Serial connected.")
+
+            # initialize commands
+            queue.append(['c', bc.cFitnessMachineControlPointUUID, b'\x80\x05\x01'])
+            queue.append(['s', 'CM'])
+
+            # stay alive until disconnected
+            while serial_connected and running:
+                if len(queue) > 0:
+                    if (queue[0][0]=='s'):
+                        logger.debug(queue)
+                        if (queue[0][1]=='PW'):
+                            protocol.askState(queue[0][2])
+                        if (queue[0][1]=='ST'):
+                            protocol.askState(0)
+                        if (queue[0][1]=='CM'):
+                            protocol.reset()
+                            await asyncio.sleep(5)
+                            protocol.init()
+                            await asyncio.sleep(1)
+                            gained_control = True
+                            queue.append(['s','PW',100])
+                        queue = queue[1:]
+                await asyncio.sleep(0.5)
+
+        except Exception as e:
+            print("Serial connection failed, retrying in 3 sec...")
+            serial_connected = False
+            await asyncio.sleep(3)
 
 
 def read_request(characteristic: BlessGATTCharacteristic, **kwargs) -> bytearray:
@@ -384,7 +397,7 @@ async def run(loop):
         #send=send.replace(b'\xdd\xdd', _hr)
         flags = (bc.ibd_InstantaneousCadencePresent | bc.ibd_InstantaneousPowerPresent)
         s     = int(speed * 100) & 0xffff      # Avoid value anomalities
-        s = 0xffff
+        #s = 0xffff
         c     = int(rpm*2 )      & 0xffff      # Avoid value anomalities
         p     = int(power)       & 0xffff      # Avoid value anomalities
         info  = struct.pack (bc.little_endian + bc.unsigned_short * 4, flags, s, c, p)
@@ -452,7 +465,8 @@ def createTCX(session_data):
 async def repeater(): # Here
     loop = asyncio.get_running_loop()
     loop.create_task(reader()) # Here
-    await loop.create_task(run(loop)) # "await" is needed
+    await run(loop)
+    #await loop.create_task(run(loop)) # "await" is needed
 
 
 def pressed_keys(e):
@@ -494,10 +508,12 @@ if __name__ == "__main__":
         loop.run_until_complete(repeater()) 
     except KeyboardInterrupt: 
         print('\r\n\r\nbreak')
+    except Exception as e:
+        print('error :'+e)
     finally:
         subprocess.call("powercfg -change -monitor-timeout-ac 10")
         subprocess.call("powercfg -change -standby-timeout-ac 30")
         #createCSV(session_data)
-        createTCX(session_data)
+        #createTCX(session_data)
         keyboard.unhook_all()
         
